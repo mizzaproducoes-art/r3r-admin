@@ -4,17 +4,56 @@ import re
 import pdfplumber
 from io import BytesIO
 
-# --- CONFIGURAÇÃO B2B ---
-st.set_page_config(page_title="R3R Admin System", layout="wide", page_icon="🏢")
+# --- 1. CONFIGURAÇÃO VISUAL PREMIUM (CSS INJECTION) ---
+st.set_page_config(page_title="R3R Enterprise", layout="wide", page_icon="🏢")
+
+# Custom CSS para dar cara de SaaS e esconder marcas do Streamlit
+st.markdown(
+    """
+    <style>
+        /* Esconde Menu Burger e Rodapé */
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header {visibility: hidden;}
+        
+        /* Estilo dos Cards */
+        div[data-testid="stMetric"] {
+            background-color: #1E1E1E;
+            border: 1px solid #333;
+            padding: 15px;
+            border-radius: 10px;
+            color: white;
+        }
+        
+        /* Botão Principal (Download) */
+        div.stDownloadButton > button {
+            width: 100%;
+            background-color: #00C853;
+            color: white;
+            font-weight: bold;
+            border: none;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        div.stDownloadButton > button:hover {
+            background-color: #00E676;
+            color: black;
+        }
+    </style>
+""",
+    unsafe_allow_html=True,
+)
+
+# --- 2. MOTORES DE INTELIGÊNCIA (PARSERS BLINDADOS) ---
 
 
-# --- PARSERS BLINDADOS (Mesmo motor do v1.0) ---
 def parse_money(value_str):
+    """Extrai dinheiro ignorando lixo, mas exigindo formato financeiro."""
     if not value_str:
         return None
     s = str(value_str).strip()
     if "R$" not in s and "," not in s:
-        return None
+        return None  # Proteção contra KM
     clean = re.sub(r"[^\d,]", "", s)
     if not clean:
         return None
@@ -30,6 +69,7 @@ def parse_money(value_str):
 
 
 def parse_km(value_str):
+    """Extrai KM ignorando R$."""
     if not value_str:
         return 0
     s = str(value_str).strip()
@@ -45,8 +85,8 @@ def parse_km(value_str):
 
 def clean_model_name(text):
     text = str(text).replace("\n", " ").replace('"', "").replace("'", "")
-    text = re.sub(r"\b[A-Z]{3}[0-9][A-Z0-9][0-9]{2}\b", "", text)
-    text = re.sub(r"R\$\s?[\d\.,]+", "", text)
+    text = re.sub(r"\b[A-Z]{3}[0-9][A-Z0-9][0-9]{2}\b", "", text)  # Remove Placa
+    text = re.sub(r"R\$\s?[\d\.,]+", "", text)  # Remove Preços
     stopwords = [
         "oferta",
         "disponivel",
@@ -63,6 +103,8 @@ def clean_model_name(text):
         "km",
         "flex",
         "diesel",
+        "manual",
+        "automatico",
     ]
     words = text.split()
     clean = [
@@ -73,186 +115,240 @@ def clean_model_name(text):
     return " ".join(clean[:6])
 
 
-# --- LÓGICA DE EXTRAÇÃO (Motor v1.0) ---
-def driver_structured(pdf):
-    data = []
-    try:
-        for page in pdf.pages:
-            tables = page.extract_tables()
-            for table in tables:
-                for row in table:
-                    if not row:
-                        continue
-                    row_str = " ".join([str(c) for c in row if c])
-                    plate_match = re.search(
-                        r"\b[A-Z]{3}[0-9][A-Z0-9][0-9]{2}\b", row_str
-                    )
-                    if not plate_match:
-                        continue
-
-                    prices = []
-                    km = 0
-                    for cell in row:
-                        c_str = str(cell).strip()
-                        m_val = parse_money(c_str)
-                        if m_val:
-                            prices.append(m_val)
-                        else:
-                            k_val = parse_km(c_str)
-                            if k_val > km:
-                                km = k_val
-
-                    prices = sorted(list(set(prices)), reverse=True)
-                    if len(prices) >= 2:
-                        fipe = prices[0]
-                        repasse = prices[1]
-                        data.append(
-                            {
-                                "Placa": plate_match.group(),
-                                "Modelo": clean_model_name(row_str),
-                                "KM": km,
-                                "Fipe": fipe,
-                                "Custo_Original": repasse,
-                            }
-                        )
-    except:
-        pass
-    return data
+# --- 3. DRIVERS DE LEITURA (ESTRATÉGIA UNIVERSAL) ---
 
 
-def driver_universal(pdf):
-    data = []
-    try:
-        text = ""
-        for page in pdf.pages:
-            text += page.extract_text() + "\n"
-        parts = re.split(r"(\b[A-Z]{3}[0-9][A-Z0-9][0-9]{2}\b)", text)
-        for i in range(1, len(parts) - 1, 2):
-            placa = parts[i]
-            content = parts[i + 1]
-            prices_raw = re.findall(r"R\$\s?[\d\.,]+", content)
-            prices = sorted(
-                [p for p in [parse_money(pr) for pr in prices_raw] if p], reverse=True
-            )
-            km = 0
-            km_match = re.search(r"(?:KM|Km)\s?([\d\.]+)", content)
-            if km_match:
-                km = parse_km(km_match.group(1))
+def process_pdf_universal(file):
+    """
+    Tenta todas as estratégias possíveis.
+    Retorna uma lista de carros ou lista vazia.
+    """
+    data_found = []
 
-            if len(prices) >= 2:
-                data.append(
-                    {
-                        "Placa": placa,
-                        "Modelo": clean_model_name(content),
-                        "KM": km,
-                        "Fipe": prices[0],
-                        "Custo_Original": prices[1],
-                    }
-                )
-    except:
-        pass
-    return data
-
-
-def process_file(file):
     with pdfplumber.open(file) as pdf:
-        first_page = pdf.pages[0].extract_text() or ""
-        if (
-            "Placa" in first_page
-            or "Modelo" in first_page
-            or "Desmob" in first_page
-            or "R3R" in first_page
-        ):
-            return driver_structured(pdf)
-        else:
-            return driver_universal(pdf)
+        full_text = ""
+        # 1. Tenta extrair texto bruto (para Regex)
+        for page in pdf.pages:
+            t = page.extract_text()
+            if t:
+                full_text += t + "\n"
+
+        # ESTRATÉGIA A: Tabela Estruturada (Melhor para R3R/Alphaville)
+        try:
+            for page in pdf.pages:
+                tables = page.extract_tables()
+                for table in tables:
+                    for row in table:
+                        if not row:
+                            continue
+                        row_str = " ".join([str(c) for c in row if c])
+                        plate_match = re.search(
+                            r"\b[A-Z]{3}[0-9][A-Z0-9][0-9]{2}\b", row_str
+                        )
+
+                        if plate_match:
+                            prices = []
+                            km = 0
+                            for cell in row:
+                                c_str = str(cell).strip()
+                                m = parse_money(c_str)
+                                if m:
+                                    prices.append(m)
+                                else:
+                                    k = parse_km(c_str)
+                                    if k > km:
+                                        km = k
+
+                            prices = sorted(list(set(prices)), reverse=True)
+                            if len(prices) >= 2:
+                                data_found.append(
+                                    {
+                                        "Placa": plate_match.group(),
+                                        "Modelo": clean_model_name(row_str),
+                                        "KM": km,
+                                        "Fipe": prices[0],
+                                        "Custo_Original": prices[1],
+                                        "Origem": "Tabela",
+                                    }
+                                )
+        except:
+            pass
+
+        # Se a estratégia A achou poucos carros (< 3) ou nenhum, tenta ESTRATÉGIA B
+        if len(data_found) < 3:
+            # ESTRATÉGIA B: Regex no Texto (Melhor para Mauá/Barueri/Genéricos)
+            # Divide o texto por Placas
+            parts = re.split(r"(\b[A-Z]{3}[0-9][A-Z0-9][0-9]{2}\b)", full_text)
+
+            # Resetamos a lista para evitar duplicatas se a A achou algo parcial
+            temp_data = []
+
+            for i in range(1, len(parts) - 1, 2):
+                placa = parts[i]
+                content = parts[i + 1]  # Texto logo após a placa
+
+                prices_raw = re.findall(r"R\$\s?[\d\.,]+", content)
+                prices = sorted(
+                    [p for p in [parse_money(pr) for pr in prices_raw] if p],
+                    reverse=True,
+                )
+
+                km = 0
+                km_match = re.search(r"(?:KM|Km)\s?([\d\.]+)", content)
+                if km_match:
+                    km = parse_km(km_match.group(1))
+                else:
+                    # Tenta achar numero solto grande (Fallback KM)
+                    loose = re.search(r"\b(\d{4,6})\b", content)
+                    if loose and 0 < int(loose.group(1)) < 300000:
+                        km = int(loose.group(1))
+
+                if len(prices) >= 2:
+                    temp_data.append(
+                        {
+                            "Placa": placa,
+                            "Modelo": clean_model_name(content),
+                            "KM": km,
+                            "Fipe": prices[0],
+                            "Custo_Original": prices[1],
+                            "Origem": "Texto",
+                        }
+                    )
+
+            # Se a estratégia B achou mais carros que a A, usamos a B
+            if len(temp_data) > len(data_found):
+                data_found = temp_data
+
+    return data_found
 
 
-# --- FRONTEND EXCLUSIVO B2B ---
-st.sidebar.title("🏢 R3R Admin")
-st.sidebar.info("Ferramenta Interna de Precificação")
+# --- 4. INTERFACE DO DASHBOARD (SIDEBAR) ---
+with st.sidebar:
+    st.markdown("## 🏢 R3R Admin")
+    st.markdown("---")
 
-# INPUTS DE MARGEM
-st.sidebar.header("1. Configurar Margem")
-tipo_margem = st.sidebar.radio(
-    "Tipo de Acréscimo:", ["Valor Fixo (R$)", "Porcentagem (%)"]
-)
+    st.markdown("### ⚙️ Configuração de Margem")
+    margem_tipo = st.radio("Adicionar:", ["Valor Fixo (R$)", "Porcentagem (%)"])
 
-if tipo_margem == "Valor Fixo (R$)":
-    valor_extra = st.sidebar.number_input("Adicionar R$:", value=2000.0, step=100.0)
-else:
-    pct_extra = st.sidebar.number_input("Adicionar %:", value=5.0, step=0.5)
+    if margem_tipo == "Valor Fixo (R$)":
+        margem_valor = st.number_input("Valor Extra (R$)", value=2000.0, step=100.0)
+    else:
+        margem_pct = st.number_input("Porcentagem Extra (%)", value=5.0, step=0.5)
 
-st.title("Gerador de Listas R3R 🚀")
-st.markdown("Transforme listas bagunçadas em planilhas limpas com sua margem aplicada.")
+    st.markdown("---")
+    st.caption("Sistema v2.0 Enterprise")
+    st.caption("Licenciado para: **R3R Repasses**")
 
+# --- 5. ÁREA PRINCIPAL (DASHBOARD) ---
+st.title("Gerenciador de Estoque & Precificação")
+st.markdown("Importe as listas brutas e gere tabelas padronizadas para o grupo.")
+
+# Área de Upload Estilizada
 uploaded_file = st.file_uploader(
-    "Subir PDF da Fonte (Localiza, Alphaville, etc)", type="pdf"
+    "📂 Arraste o PDF da Fonte (Alphaville, Localiza, etc)", type="pdf"
 )
 
 if uploaded_file:
-    with st.spinner("Processando e padronizando..."):
-        data = process_file(uploaded_file)
+    with st.spinner("🔄 Processando Inteligência Artificial..."):
+        try:
+            data = process_pdf_universal(uploaded_file)
 
-        if data:
-            df = pd.DataFrame(data)
+            if data:
+                df = pd.DataFrame(data)
 
-            # --- CÁLCULO DA NOVA TABELA ---
-            if tipo_margem == "Valor Fixo (R$)":
-                df["Preco_Venda_R3R"] = df["Custo_Original"] + valor_extra
-            else:
-                df["Preco_Venda_R3R"] = df["Custo_Original"] * (1 + pct_extra / 100)
+                # --- APLICAR REGRAS DE NEGÓCIO ---
+                if margem_tipo == "Valor Fixo (R$)":
+                    df["Preco_Venda"] = df["Custo_Original"] + margem_valor
+                else:
+                    df["Preco_Venda"] = df["Custo_Original"] * (1 + margem_pct / 100)
 
-            # Formatação Fipe
-            df["Margem_R3R_Estimada"] = df["Preco_Venda_R3R"] - df["Custo_Original"]
-            df["Distancia_Fipe"] = df["Fipe"] - df["Preco_Venda_R3R"]
+                # Cálculo de KPIs
+                df["Lucro_Bruto_Previsto"] = df["Preco_Venda"] - df["Custo_Original"]
 
-            # Ordenar
-            df = df.sort_values(by="Preco_Venda_R3R", ascending=True)
+                # Ordenação Inteligente (Os mais baratos primeiro para vender rápido)
+                df = df.sort_values(by="Preco_Venda", ascending=True)
 
-            # --- VISUALIZAÇÃO ---
-            st.success(f"{len(df)} veículos processados com sucesso!")
+                # --- DASHBOARD DE RESUMO ---
+                st.markdown("### 📊 Resumo do Lote")
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Veículos Detectados", len(df))
+                col2.metric(
+                    "Valor Total (Custo)", f"R$ {df['Custo_Original'].sum():,.0f}"
+                )
+                col3.metric("Valor Total (Venda)", f"R$ {df['Preco_Venda'].sum():,.0f}")
+                col4.metric(
+                    "Lucro Potencial",
+                    f"R$ {df['Lucro_Bruto_Previsto'].sum():,.0f}",
+                    delta="Estimado",
+                )
 
-            st.dataframe(
-                df[
-                    [
-                        "Placa",
-                        "Modelo",
-                        "KM",
-                        "Fipe",
-                        "Custo_Original",
-                        "Preco_Venda_R3R",
-                    ]
-                ],
-                use_container_width=True,
-                column_config={
-                    "Custo_Original": st.column_config.NumberColumn(
-                        "Custo (Fonte)", format="R$ %.2f"
-                    ),
-                    "Preco_Venda_R3R": st.column_config.NumberColumn(
-                        "✅ Preço Final R3R", format="R$ %.2f"
-                    ),
-                    "Fipe": st.column_config.NumberColumn("Fipe", format="R$ %.2f"),
-                },
-            )
+                st.divider()
 
-            # --- EXPORTAÇÃO (O Ouro) ---
-            def to_excel(df):
+                # --- TABELA INTERATIVA ---
+                st.subheader("📋 Prévia da Lista Formatada")
+                # Fallback para coluna 'Ano' se não existir no df original
+                if "Ano" not in df.columns:
+                    df["Ano"] = "-"
+
+                st.dataframe(
+                    df[["Placa", "Modelo", "Ano", "KM", "Fipe", "Preco_Venda"]],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Preco_Venda": st.column_config.NumberColumn(
+                            "💰 PREÇO R3R", format="R$ %.2f"
+                        ),
+                        "Fipe": st.column_config.NumberColumn(
+                            "Tabela Fipe", format="R$ %.2f"
+                        ),
+                        "KM": st.column_config.NumberColumn("KM", format="%d km"),
+                    },
+                )
+
+                # --- EXPORTAÇÃO (O PRODUTO FINAL) ---
+                st.divider()
+
+                # Gera Excel em memória
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-                    df.to_excel(writer, index=False, sheet_name="Lista R3R")
-                return output.getvalue()
+                    # Formatação Bonita no Excel
+                    df_export = df[
+                        ["Modelo", "Placa", "KM", "Ano", "Fipe", "Preco_Venda"]
+                    ]
+                    df_export.columns = [
+                        "MODELO",
+                        "PLACA",
+                        "KM",
+                        "ANO",
+                        "TABELA FIPE",
+                        "PREÇO R3R",
+                    ]
+                    df_export.to_excel(
+                        writer, index=False, sheet_name="Oportunidades R3R"
+                    )
 
-            excel_data = to_excel(
-                df[["Modelo", "Placa", "KM", "Fipe", "Preco_Venda_R3R"]]
-            )
+                    # Ajuste de Colunas (Auto-width)
+                    worksheet = writer.sheets["Oportunidades R3R"]
+                    for i, col in enumerate(df_export.columns):
+                        worksheet.set_column(i, i, 20)
 
-            st.download_button(
-                label="📥 Baixar Excel Formatado (Pronto para Grupo)",
-                data=excel_data,
-                file_name="Lista_R3R_Formatada.xlsx",
-                mime="application/vnd.ms-excel",
-                type="primary",
-            )
-        else:
-            st.error("Não foi possível ler o arquivo. Verifique se é um PDF válido.")
+                processed_data = output.getvalue()
+
+                st.download_button(
+                    label="📥 BAIXAR LISTA PRONTA PARA GRUPO (EXCEL)",
+                    data=processed_data,
+                    file_name="Lista_R3R_Oficial.xlsx",
+                    mime="application/vnd.ms-excel",
+                )
+
+            else:
+                st.warning(
+                    "⚠️ O sistema leu o arquivo, mas não encontrou carros com preços claros."
+                )
+                st.info(
+                    "Tente abrir o PDF e verificar se é uma imagem escaneada. O sistema precisa de texto."
+                )
+
+        except Exception as e:
+            st.error("Erro inesperado no processamento.")
+            st.code(e)

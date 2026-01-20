@@ -3,7 +3,34 @@ import pandas as pd
 import re
 import pdfplumber
 
-st.set_page_config(page_title="FipeHunter v0.9", layout="wide")
+st.set_page_config(page_title="FipeHunter v1.0", layout="wide")
+
+# --- AUTENTICACAO ---
+
+
+def check_password():
+    """Retorna True se o usuário inseriu a senha correta."""
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+
+    if st.session_state["authenticated"]:
+        return True
+
+    st.title("Acesso Restrito - FipeHunter")
+    password = st.text_input("Digite a senha para acessar:", type="password")
+
+    if st.button("Entrar"):
+        if password == "FIPE2026":
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Senha incorreta. Tente novamente.")
+
+    return False
+
+
+if not check_password():
+    st.stop()
 
 # --- FUNCOES DE PARSING ESTRITO ---
 

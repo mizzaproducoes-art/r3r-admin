@@ -259,7 +259,7 @@ def process_file(file):
 
 
 # --- INTERFACE ---
-st.title("FipeHunter v0.9 (Correcao KM vs Fipe)")
+st.title("FIPEHUNTER v0.9")
 st.markdown("Analise de margem real com distincao estrita de valores.")
 
 uploaded_file = st.file_uploader("Upload do PDF", type="pdf")

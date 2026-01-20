@@ -237,8 +237,6 @@ def driver_universal_fallback(pdf):
 
 def process_file_bulletproof(file):
     """CAMADA 3 (Gerente): Tenta estratégias em ordem."""
-    import pdfplumber
-
     with pdfplumber.open(file) as pdf:
         # Checagem 0: O PDF é imagem?
         first_page_text = pdf.pages[0].extract_text()
@@ -276,12 +274,6 @@ with st.sidebar:
 
     st.divider()
     st.caption("v1.1 Pro | Atualizado em: 20/01/2026")
-
-
-def main():
-    import pandas as pd
-
-    st.title("🎯 FipeHunter Pro")
 
 
 st.markdown("### Inteligência de Mercado para Repasses")

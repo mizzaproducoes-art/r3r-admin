@@ -56,7 +56,7 @@ def parse_money(value_str):
             clean = clean.replace(".", "")
         val = float(clean)
         return val if val > 2000 else None  # Filtra taxas pequenas
-    except:
+    except Exception:
         return None
 
 
@@ -72,7 +72,7 @@ def parse_km(value_str):
     try:
         val = int(clean)
         return val if 0 <= val < 400000 else 0  # Filtro de sanidade KM
-    except:
+    except Exception:
         return 0
 
 
@@ -271,6 +271,9 @@ with st.sidebar:
     target_km = st.slider("🚗 KM Máxima aceitável:", 0, 200000, 150000, step=10000)
 
     min_margin = st.slider("📈 Margem Mínima (%):", 0, 50, 10)
+
+    st.divider()
+    st.caption("v1.1 Pro | Atualizado em: 20/01/2026")
 
 st.title("🎯 FipeHunter Pro")
 st.markdown("### Inteligência de Mercado para Repasses")

@@ -197,7 +197,6 @@ def process_pdf_universal(file):
 
 # --- 4. INTERFACE ---
 with st.sidebar:
-    st.markdown("## 🏢 R3R Admin")
     st.markdown("---")
 
     # Controle de Visibilidade das Margens

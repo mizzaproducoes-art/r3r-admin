@@ -120,30 +120,53 @@ def extract_cars(row):
     return cars
 
 
-def process(file):
+def process(file, debug=False):
     data = []
+    debug_info = []
     with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
+        for page_num, page in enumerate(pdf.pages):
             tables = page.extract_tables()
-            for table in tables:
+            for table_num, table in enumerate(tables):
+                if debug and table:
+                    # Mostra estrutura da tabela para debug
+                    debug_info.append(
+                        {
+                            "page": page_num + 1,
+                            "table": table_num + 1,
+                            "num_cols": len(table[0]) if table else 0,
+                            "first_rows": table[:3] if len(table) >= 3 else table,
+                        }
+                    )
                 for row in table:
                     if row and row[0] and "LOJA" not in str(row[0]):
                         data.extend(extract_cars(row))
-    return data
+    return data, debug_info if debug else (data, [])
 
 
 # --- APP ---
 st.sidebar.header("Filtros")
 f_marca = st.sidebar.multiselect("Marca", MARCAS)
 f_invest = st.sidebar.number_input("Max Investimento", step=5000)
+debug_mode = st.sidebar.checkbox("🔧 Modo Debug")
 
 st.title("🎯 FipeHunter Pro")
 up = st.file_uploader("PDF Alphaville", type="pdf")
 
 if up:
     with st.spinner("Analisando..."):
-        data = process(up)
+        data, debug_info = process(up, debug=debug_mode)
         df = pd.DataFrame(data)
+
+        # Mostra debug se ativado
+        if debug_mode and debug_info:
+            st.subheader("🔍 Estrutura do PDF (Debug)")
+            for info in debug_info[:3]:  # Primeiras 3 tabelas
+                st.write(
+                    f"**Página {info['page']}, Tabela {info['table']}** - {info['num_cols']} colunas"
+                )
+                for i, row in enumerate(info["first_rows"]):
+                    st.code(f"Linha {i}: {row}", language="python")
+            st.divider()
 
         if not df.empty:
             df["Lucro"] = df["Fipe"] - df["Repasse"]
@@ -162,4 +185,4 @@ if up:
                 use_container_width=True,
             )
         else:
-            st.warning("Sem dados.")
+            st.warning("Sem dados. Ative o Modo Debug para ver a estrutura do PDF.")

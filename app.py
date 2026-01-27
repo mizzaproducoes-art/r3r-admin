@@ -2,39 +2,22 @@ import streamlit as st
 import pandas as pd
 import re
 import pdfplumber
+import io
 
-# --- 1. CONFIGURAÇÃO VISUAL PREMIUM ---
+# --- CONFIGURAÇÃO ---
 st.set_page_config(page_title="FipeHunter Pro", layout="wide", page_icon="🎯")
-
 st.markdown(
     """
     <style>
-        #MainMenu {visibility: hidden;}
-        footer {visibility: hidden;}
-        header {visibility: hidden;}
-        
-        div[data-testid="stMetric"] {
-            background-color: #1E1E1E;
-            border: 1px solid #333;
-            padding: 15px;
-            border-radius: 10px;
-            color: white;
-        }
-        div.stDownloadButton > button {
-            width: 100%;
-            background-color: #00C853;
-            color: white;
-            font-weight: bold;
-            border: none;
-            padding: 15px;
-            border-radius: 8px;
-        }
+        #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
+        div[data-testid="stMetric"] { background-color: #1E1E1E; border: 1px solid #333; padding: 15px; border-radius: 10px; color: white; }
+        div.stDownloadButton > button { width: 100%; background-color: #00C853; color: white; font-weight: bold; padding: 15px; border-radius: 8px; }
     </style>
 """,
     unsafe_allow_html=True,
 )
 
-# --- 2. DADOS PRÉ-CARREGADOS (PARA OS FILTROS APARECEREM ANTES) ---
+# --- DADOS ESTÁTICOS ---
 LISTA_MARCAS = [
     "CHEVROLET",
     "VOLKSWAGEN",
@@ -50,7 +33,7 @@ LISTA_MARCAS = [
     "FORD",
     "MITSUBISHI",
     "BMW",
-    "MERCEDES-BENZ",
+    "MERCEDES",
     "AUDI",
     "KIA",
     "CAOA CHERY",
@@ -70,444 +53,258 @@ LISTA_CORES = [
     "VERDE",
     "MARROM",
     "DOURADO",
-    "LARANJA",
     "VINHO",
 ]
-LISTA_ANOS = [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017]
+LISTA_ANOS = [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018]
 
 
-# --- 3. SISTEMA DE SEGURANÇA ---
+# --- LOGIN ---
 def check_password():
     if st.session_state.get("authenticated", False):
         return True
-
-    st.markdown("### 🔒 Acesso Restrito - FipeHunter")
-    st.markdown("Digite a senha enviada no seu e-mail de compra.")
-    password = st.text_input("Senha de Acesso", type="password")
-
+    st.markdown("### 🔒 Acesso Restrito")
+    pwd = st.text_input("Senha", type="password")
     if st.button("Entrar"):
-        if password == "FIPE2026":
+        if pwd == "FIPE2026":
             st.session_state["authenticated"] = True
             st.rerun()
         else:
             st.error("Senha incorreta.")
-            return False
     return False
 
 
 if not check_password():
     st.stop()
 
-# --- 4. MOTORES DE EXTRAÇÃO ---
 
-
+# --- MOTOR DE LEITURA INTELIGENTE ---
 def parse_money(value_str):
     if not value_str:
         return None
-    s = str(value_str).strip()
-    if "R$" not in s and "," not in s:
-        return None
-    clean = re.sub(r"[^\d,]", "", s)
+    clean = re.sub(r"[^\d,]", "", str(value_str))
     if not clean:
         return None
     try:
-        if "," in clean:
-            clean = clean.replace(".", "").replace(",", ".")
-        else:
-            clean = clean.replace(".", "")
-        val = float(clean)
+        val = (
+            float(clean.replace(".", "").replace(",", "."))
+            if "," in clean
+            else float(clean.replace(".", ""))
+        )
         return val if val > 2000 else None
-    except Exception:
+    except:
         return None
 
 
-def parse_km(value_str):
-    if not value_str:
-        return 0
-    s = str(value_str).strip()
-    if "R$" in s or "," in s:
-        return 0
-    clean = re.sub(r"[^\d]", "", s)
-    try:
-        val = int(clean)
-        return val if 0 <= val < 400000 else 0
-    except Exception:
-        return 0
+def clean_info(text):
+    text = str(text).upper()
+    # Extrai Marca
+    marca = "OUTROS"
+    for m in LISTA_MARCAS:
+        if m in text:
+            marca = m
+            break
+    # Extrai Cor
+    cor = "OUTROS"
+    for c in LISTA_CORES:
+        if c in text:
+            cor = "BRANCO" if c == "BRANCA" else c
+            break
+    # Extrai Ano
+    anos = re.findall(r"\b(20[1-2][0-9])\b", text)
+    ano_mod = int(anos[1]) if len(anos) >= 2 else (int(anos[0]) if anos else 0)
+
+    # Limpa Modelo
+    clean = re.sub(r"\b[A-Z]{3}[0-9][A-Z0-9][0-9]{2}\b", "", text)  # Placa
+    clean = re.sub(r"R\$\s?[\d\.,]+", "", clean)  # Preço
+    clean = re.sub(r"\b20[1-2][0-9]\b", "", clean)  # Ano
+    words = clean.split()
+    ignore = (
+        [
+            "OFERTA",
+            "DISPONIVEL",
+            "VCPBR",
+            "VCPER",
+            "APROVADO",
+            "BARUERI",
+            "ALPHAVILLE",
+            "SP",
+            "MARGIN",
+            "FIPE",
+            "ORCAMENTO",
+        ]
+        + LISTA_MARCAS
+        + LISTA_CORES
+    )
+    modelo = " ".join(
+        [w for w in words if w not in ignore and len(w) > 2 and not w.isdigit()][:6]
+    )
+
+    return marca, modelo, cor, ano_mod
 
 
-def extract_years(text):
-    short_years = re.search(r"\b(\d{2})/(\d{2})\b", text)
-    if short_years:
-        y1 = int(short_years.group(1)) + 2000
-        y2 = int(short_years.group(2)) + 2000
-        return y1, y2
-    years = re.findall(r"\b(20[1-2][0-9])\b", text)
-    unique_years = sorted(list(set([int(y) for y in years])))
-    if len(unique_years) >= 2:
-        return unique_years[0], unique_years[1]
-    elif len(unique_years) == 1:
-        return unique_years[0], unique_years[0]
-    return 0, 0
-
-
-def extract_color(text):
-    text_upper = text.upper()
-    for cor in LISTA_CORES:
-        if cor in text_upper:
-            if cor == "BRANCA":
-                return "BRANCO"  # Normalização simples
-            return cor
-    return "OUTROS"
-
-
-def clean_model_and_brand(text):
-    text = str(text).replace("\n", " ").replace('"', "").replace("'", "")
-    text = re.sub(r"\b[A-Z]{3}[0-9][A-Z0-9][0-9]{2}\b", "", text)
-    text = re.sub(r"R\$\s?[\d\.,]+", "", text)
-    text = re.sub(r"\b20[1-2][0-9]\b", "", text)
-
-    stopwords = [
-        "oferta",
-        "disponivel",
-        "sp",
-        "barueri",
-        "maua",
-        "sorocaba",
-        "campinas",
-        "margem",
-        "fipe",
-        "preco",
-        "ganho",
-        "ipva",
-        "km",
-        "flex",
-        "diesel",
-        "manual",
-        "automatico",
-        "automático",
-        "aut",
-    ] + LISTA_CORES
-    words = text.split()
-    clean_words = [
-        w
-        for w in words
-        if w.lower() not in [s.lower() for s in stopwords]
-        and len(w) > 2
-        and not w.isdigit()
-    ]
-    full_name = " ".join(clean_words[:6])
-
-    # Extração de Marca Baseada na Lista Pré-definida
-    marca_encontrada = "OUTROS"
-    if clean_words:
-        first = clean_words[0].upper()
-        # Normalizações comuns
-        if first in ["VW", "VOLKS"]:
-            first = "VOLKSWAGEN"
-        if first in ["GM", "CHEV"]:
-            first = "CHEVROLET"
-
-        if first in LISTA_MARCAS:
-            marca_encontrada = first
-        else:
-            # Tenta achar a marca no meio do nome se não for a primeira palavra
-            for m in LISTA_MARCAS:
-                if m in full_name.upper():
-                    marca_encontrada = m
-                    break
-
-    return full_name, marca_encontrada
-
-
-def process_pdf_universal(file):
-    data_found = []
+def process_pdf(file):
+    data = []
     with pdfplumber.open(file) as pdf:
         full_text = ""
+        # Estratégia Texto (Melhor para layouts mistos)
         for page in pdf.pages:
-            t = page.extract_text()
-            if t:
-                full_text += t + "\n"
+            full_text += page.extract_text() + "\n"
 
-        # ESTRATÉGIA A: Tabela
-        try:
-            for page in pdf.pages:
-                tables = page.extract_tables()
-                for table in tables:
-                    for row in table:
-                        if not row:
-                            continue
-                        row_str = " ".join([str(c) for c in row if c])
-                        plate_match = re.search(
-                            r"\b[A-Z]{3}[0-9][A-Z0-9][0-9]{2}\b", row_str
-                        )
-                        if plate_match:
-                            prices = []
-                            km = 0
-                            for cell in row:
-                                c_str = str(cell).strip()
-                                m = parse_money(c_str)
-                                if m:
-                                    prices.append(m)
-                                else:
-                                    k = parse_km(c_str)
-                                    if k > km:
-                                        km = k
-                            prices = sorted(list(set(prices)), reverse=True)
-                            if len(prices) >= 2:
-                                modelo, marca = clean_model_and_brand(row_str)
-                                ano_fab, ano_mod = extract_years(row_str)
-                                cor = extract_color(row_str)
-                                data_found.append(
-                                    {
-                                        "Marca": marca,
-                                        "Modelo": modelo,
-                                        "Placa": plate_match.group(),
-                                        "Ano_Fab": ano_fab,
-                                        "Ano_Mod": ano_mod,
-                                        "Cor": cor,
-                                        "KM": km,
-                                        "Fipe": prices[0],
-                                        "Repasse": prices[1],
-                                    }
-                                )
-        except Exception:
-            pass
+        # Quebra por Placas
+        parts = re.split(r"(\b[A-Z]{3}[0-9][A-Z0-9][0-9]{2}\b)", full_text)
+        for i in range(1, len(parts) - 1, 2):
+            placa = parts[i]
+            ctx = parts[i + 1]  # Contexto após a placa
 
-        # ESTRATÉGIA B: Texto
-        if len(data_found) < 3:
-            parts = re.split(r"(\b[A-Z]{3}[0-9][A-Z0-9][0-9]{2}\b)", full_text)
-            temp_data = []
-            for i in range(1, len(parts) - 1, 2):
-                placa = parts[i]
-                content = parts[i + 1]
-                prices_raw = re.findall(r"R\$\s?[\d\.,]+", content)
-                prices = sorted(
-                    [p for p in [parse_money(pr) for pr in prices_raw] if p],
-                    reverse=True,
-                )
+            # Extrai Dinheiro
+            prices = sorted(
+                [
+                    p
+                    for p in [
+                        parse_money(m) for m in re.findall(r"R\$\s?[\d\.,]+", ctx)
+                    ]
+                    if p
+                ],
+                reverse=True,
+            )
+            if len(prices) >= 2:
+                # Fipe é o maior, Repasse é o segundo maior (ignorando margens pequenas)
+                fipe = prices[0]
+                repasse = prices[1]
+                if repasse < 10000:
+                    continue  # Erro de leitura (pegou margem como preço)
+
+                marca, modelo, cor, ano = clean_info(ctx)
+
+                # KM (Tenta achar perto)
                 km = 0
-                km_match = re.search(r"(?:KM|Km)\s?([\d\.]+)", content)
+                km_match = re.search(
+                    r"(\d{4,6})", ctx[:50]
+                )  # Procura números grandes logo após a placa
                 if km_match:
-                    km = parse_km(km_match.group(1))
-                else:
-                    loose = re.search(r"\b(\d{4,6})\b", content)
-                    if loose and 0 < int(loose.group(1)) < 300000:
-                        km = int(loose.group(1))
-                if len(prices) >= 2:
-                    modelo, marca = clean_model_and_brand(content)
-                    ano_fab, ano_mod = extract_years(content)
-                    cor = extract_color(content)
-                    temp_data.append(
-                        {
-                            "Marca": marca,
-                            "Modelo": modelo,
-                            "Placa": placa,
-                            "Ano_Fab": ano_fab,
-                            "Ano_Mod": ano_mod,
-                            "Cor": cor,
-                            "KM": km,
-                            "Fipe": prices[0],
-                            "Repasse": prices[1],
-                        }
-                    )
-            if len(temp_data) > len(data_found):
-                data_found = temp_data
-    return data_found
+                    k_val = int(km_match.group(1))
+                    if k_val < 300000:
+                        km = k_val
+
+                data.append(
+                    {
+                        "Marca": marca,
+                        "Modelo": modelo,
+                        "Cor": cor,
+                        "Ano": ano,
+                        "Placa": placa,
+                        "KM": km,
+                        "Fipe": fipe,
+                        "Repasse": repasse,
+                    }
+                )
+    return data
 
 
-# --- 5. SIDEBAR COM FILTROS FIXOS (A MÁGICA) ---
-
+# --- SIDEBAR (FILTROS) ---
 st.sidebar.header("🔍 Filtros Pré-Upload")
-st.sidebar.caption("Configure antes ou depois de carregar.")
-
-# 1. Filtros Financeiros
-max_invest = st.sidebar.number_input(
-    "💰 Investimento Máximo (R$):", min_value=0.0, value=0.0, step=5000.0
-)
-target_km = st.sidebar.slider("🚗 KM Máxima:", 0, 200000, 150000, step=5000)
-min_margin = st.sidebar.slider("📈 Margem Mínima (%):", 0, 50, 10)
-
-st.sidebar.divider()
-st.sidebar.header("🚙 Filtros de Veículo")
-
-# 2. Filtros de Atributos (AGORA FIXOS)
-# Deixamos vazio [] como padrão para "TODOS"
+max_inv = st.sidebar.number_input("💰 Máx. Investimento:", step=5000.0)
 sel_marcas = st.sidebar.multiselect("Montadora:", LISTA_MARCAS)
-sel_anos = st.sidebar.multiselect("Ano Modelo:", LISTA_ANOS)
+sel_anos = st.sidebar.multiselect("Ano:", LISTA_ANOS)
 sel_cores = st.sidebar.multiselect("Cor:", LISTA_CORES)
+txt_busca = st.sidebar.text_input("Buscar Modelo (ex: Corolla):")
 
-# 3. Filtro de Modelo (Texto Livre - Funciona antes do Upload)
-txt_modelo = st.sidebar.text_input("Buscar Modelo (ex: Corolla):", "")
-
-# --- 6. ÁREA PRINCIPAL ---
-
+# --- APP ---
 st.title("🎯 FipeHunter Pro")
-st.markdown("### Inteligência Artificial para Repasses")
 
-if sel_marcas or txt_modelo:
-    st.info(
-        f"🎯 Filtro Ativo: Buscando {sel_marcas if sel_marcas else ''} {txt_modelo}"
-    )
+if uploaded_file := st.file_uploader("Arraste o PDF", type="pdf"):
+    with st.spinner("Lendo direto da fonte..."):
+        raw = process_pdf(uploaded_file)
+        df = pd.DataFrame(raw)
 
-uploaded_file = st.file_uploader("Arraste seu PDF aqui para processar", type="pdf")
+        if not df.empty:
+            final = []
+            for _, row in df.iterrows():
+                lucro = row["Fipe"] - row["Repasse"]
+                margem = (lucro / row["Fipe"] * 100) if row["Fipe"] > 0 else 0
 
-if uploaded_file:
-    with st.spinner("Aplicando seus filtros..."):
-        try:
-            raw_data = process_pdf_universal(uploaded_file)
-            df = pd.DataFrame(raw_data)
+                # Filtros
+                ok = True
+                if max_inv > 0 and row["Repasse"] > max_inv:
+                    ok = False
+                if sel_marcas and row["Marca"] not in sel_marcas:
+                    ok = False
+                if sel_anos and row["Ano"] not in sel_anos:
+                    ok = False
+                if sel_cores and row["Cor"] not in sel_cores:
+                    ok = False
+                if txt_busca and txt_busca.upper() not in row["Modelo"]:
+                    ok = False
 
-            if not df.empty:
-                final_data = []
+                if ok and lucro > 0:
+                    row["Lucro"] = lucro
+                    row["Margem"] = margem
+                    final.append(row)
 
-                for index, item in df.iterrows():
-                    lucro = item["Fipe"] - item["Repasse"]
+            df_final = pd.DataFrame(final).sort_values(by="Lucro", ascending=False)
 
-                    if item["Fipe"] > 0:
-                        margem = (lucro / item["Fipe"]) * 100
+            if not df_final.empty:
+                st.success(f"{len(df_final)} oportunidades encontradas!")
 
-                        # --- VERIFICAÇÃO DE FILTROS ---
-
-                        # 1. Marca (Se lista vazia, passa tudo. Se não, checa)
-                        pass_marca = True
-                        if sel_marcas:
-                            if item["Marca"] not in sel_marcas:
-                                pass_marca = False
-
-                        # 2. Ano (Se lista vazia, passa tudo)
-                        pass_ano = True
-                        if sel_anos:
-                            if item["Ano_Mod"] not in sel_anos:
-                                pass_ano = False
-
-                        # 3. Cor
-                        pass_cor = True
-                        if sel_cores:
-                            if item["Cor"] not in sel_cores:
-                                pass_cor = False
-
-                        # 4. Modelo (Busca Texto Parcial)
-                        pass_modelo = True
-                        if txt_modelo:
-                            if txt_modelo.upper() not in item["Modelo"].upper():
-                                pass_modelo = False
-
-                        # 5. Financeiros
-                        pass_invest = (
-                            True if max_invest == 0 else (item["Repasse"] <= max_invest)
-                        )
-                        pass_km = True if item["KM"] <= target_km else False
-                        pass_margin = True if margem >= min_margin else False
-
-                        if (
-                            pass_marca
-                            and pass_ano
-                            and pass_cor
-                            and pass_modelo
-                            and pass_invest
-                            and pass_km
-                            and pass_margin
-                            and (1 < margem < 70)
-                        ):
-                            row_dict = item.to_dict()
-                            row_dict["Lucro_Real"] = lucro
-                            row_dict["Margem_%"] = round(margem, 1)
-                            final_data.append(row_dict)
-
-                df_final = pd.DataFrame(final_data)
-
-                if not df_final.empty:
-                    df_final = df_final.sort_values(by="Lucro_Real", ascending=False)
-
-                    st.success(f"Encontramos {len(df_final)} veículos!")
-
-                    # --- TOP 3 CARDS ---
-                    st.divider()
-                    st.subheader("🔥 Top 3 Oportunidades")
-                    cols = st.columns(3)
-                    for i in range(min(3, len(df_final))):
-                        row = df_final.iloc[i]
-
-                        lucro_fmt = (
-                            f"R$ {row['Lucro_Real']:,.0f}".replace(",", "X")
-                            .replace(".", ",")
-                            .replace("X", ".")
-                        )
-                        paga_fmt = (
-                            f"R$ {row['Repasse']:,.0f}".replace(",", "X")
-                            .replace(".", ",")
-                            .replace("X", ".")
-                        )
-                        ano_str = (
-                            f"{row['Ano_Fab']}/{row['Ano_Mod']}"
-                            if row["Ano_Mod"] > 0
-                            else "N/D"
-                        )
-
-                        cols[i].metric(
-                            label=f"{row['Marca']} {row['Modelo']}",
-                            value=f"Lucro: {lucro_fmt}",
-                            delta=f"{row['Margem_%']}% Margem",
-                        )
-                        cols[i].markdown(f"**Cor:** {row['Cor']} | **Ano:** {ano_str}")
-                        cols[i].markdown(f"💸 **Paga:** {paga_fmt}")
-                        cols[i].caption(
-                            f"Fipe: R$ {row['Fipe']:,.0f} | KM: {row['KM']}"
-                        )
-                        cols[i].markdown(f"`{row['Placa']}`")
-
-                    # --- TABELA DETALHADA ---
-                    st.divider()
-                    st.subheader("📋 Lista Completa")
-
-                    st.dataframe(
-                        df_final[
-                            [
-                                "Marca",
-                                "Modelo",
-                                "Ano_Mod",
-                                "Cor",
-                                "Repasse",
-                                "Fipe",
-                                "KM",
-                                "Lucro_Real",
-                                "Margem_%",
-                            ]
-                        ],
-                        width="stretch",
-                        hide_index=True,
-                        column_config={
-                            "Marca": "Montadora",
-                            "Ano_Mod": st.column_config.NumberColumn(
-                                "Ano", format="%d"
-                            ),
-                            "Repasse": st.column_config.NumberColumn(
-                                "🔴 Você Paga", format="R$ %.2f"
-                            ),
-                            "Fipe": st.column_config.NumberColumn(
-                                "Fipe", format="R$ %.2f"
-                            ),
-                            "Lucro_Real": st.column_config.NumberColumn(
-                                "🟢 Seu Lucro", format="R$ %.2f"
-                            ),
-                            "KM": st.column_config.NumberColumn("KM", format="%d km"),
-                            "Margem_%": st.column_config.NumberColumn(
-                                "Margem %", format="%.1f%%"
-                            ),
-                        },
+                # Top 3
+                st.subheader("🔥 Melhores Ofertas")
+                cols = st.columns(3)
+                for i in range(min(3, len(df_final))):
+                    r = df_final.iloc[i]
+                    cols[i].metric(
+                        f"{r['Marca']} {r['Modelo']}",
+                        f"Lucro: R$ {r['Lucro']:,.0f}",
+                        f"{r['Margem']:.1f}%",
                     )
-                else:
-                    st.warning(
-                        "Nenhum resultado com esses filtros. Tente limpar os filtros na lateral."
+                    cols[i].markdown(
+                        f"**Paga:** R$ {r['Repasse']:,.0f} | **Fipe:** R$ {r['Fipe']:,.0f}"
                     )
+                    cols[i].caption(f"{r['Cor']} | {r['Ano']} | {r['Placa']}")
+
+                # Tabela
+                st.divider()
+                st.dataframe(
+                    df_final[
+                        [
+                            "Marca",
+                            "Modelo",
+                            "Ano",
+                            "Cor",
+                            "Repasse",
+                            "Fipe",
+                            "Lucro",
+                            "Margem",
+                        ]
+                    ],
+                    use_container_width=True,
+                )
+
+                # --- EXPORTAÇÃO (V1.6 RESTORED) ---
+                st.divider()
+                col_ex1, col_ex2 = st.columns(2)
+
+                # 1. Excel Export (xlsxwriter)
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+                    df_final.to_excel(writer, index=False, sheet_name="Oportunidades")
+                excel_data = output.getvalue()
+
+                col_ex1.download_button(
+                    label="📥 Exportar Excel (.xlsx)",
+                    data=excel_data,
+                    file_name="fipehunter_oportunidades.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+
+                # 2. CSV Export
+                csv = df_final.to_csv(index=False).encode("utf-8")
+                col_ex2.download_button(
+                    label="📄 Exportar CSV",
+                    data=csv,
+                    file_name="fipehunter_oportunidades.csv",
+                    mime="text/csv",
+                )
             else:
-                st.warning("O arquivo não contém veículos reconhecíveis.")
-
-        except Exception as e:
-            st.error("Erro ao processar.")
-            st.code(e)
-else:
-    # Mensagem de Boas Vindas quando não tem arquivo
-    st.info(
-        "👈 Configure seus filtros na barra lateral (Marca, Ano, Cor) e arraste o PDF para ver a mágica."
-    )
+                st.warning("Nenhum carro passou nos filtros.")
+        else:
+            st.error("Não consegui ler os carros. Verifique o PDF.")
